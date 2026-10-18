@@ -17,6 +17,7 @@ if (!db) {
   save();
 }
 let active = load(KEY_ACTIVE, null);
+let editMode = false;
 const charts = [];
 
 // ---------- Utilidades ----------
@@ -84,17 +85,36 @@ function renderTreino(id) {
   setHeader(t.nome, '#/'); setTab('home');
   view.innerHTML = `
     <p class="lead">${esc(t.foco)}</p>
-    <button class="btn primary big" id="start">${active?.treino === id ? 'Continuar treino' : '▶ Começar treino'}</button>
-    <h2 class="section">Exercícios do dia <small>${t.itens.length} no total</small></h2>
+    ${editMode ? '' : `<button class="btn primary big" id="start">${active?.treino === id ? 'Continuar treino' : '▶ Começar treino'}</button>`}
+    <h2 class="section">Exercícios do dia <button class="mini" id="edit">${editMode ? '✓ Concluir edição' : '✎ Editar treino'}</button></h2>
     ${t.itens.map((it, i) => {
       const ll = lastLoad(it.ex);
-      return `<a class="card ex" href="#/ex/${it.ex}">
-        <div class="num">${i + 1}</div>
+      const info = `<div class="num">${i + 1}</div>
         <div class="grow"><strong>${esc(exName(it.ex))}</strong>
-        <small>${it.series} × ${esc(it.reps)}${it.descanso ? ` · ${it.descanso}s descanso` : ''}</small>
-        ${ll != null ? `<small class="ok">Última carga: ${fmtKg(ll)}</small>` : ''}</div>
-        <span class="chev">›</span></a>`;
-    }).join('')}`;
+        <small>${esc(EXERCISES[it.ex]?.grupo || '')} · ${it.series} × ${esc(it.reps)}${it.descanso ? ` · ${it.descanso}s` : ''}</small>
+        ${ll != null && !editMode ? `<small class="ok">Última carga: ${fmtKg(ll)}</small>` : ''}</div>`;
+      return editMode
+        ? `<div class="card ex editing">${info}
+            <div class="ed-btns">
+              <button data-up="${i}" ${i === 0 ? 'disabled' : ''} aria-label="Subir">↑</button>
+              <button data-down="${i}" ${i === t.itens.length - 1 ? 'disabled' : ''} aria-label="Descer">↓</button>
+              <a class="swap" href="#/exercicios?m=${encodeURIComponent(EXERCISES[it.ex]?.grupo || '')}&troca=${t.id}|${i}" aria-label="Trocar">⇄</a>
+              <button data-del="${i}" class="danger" aria-label="Remover">✕</button>
+            </div></div>`
+        : `<a class="card ex" href="#/ex/${it.ex}">${info}<span class="chev">›</span></a>`;
+    }).join('')}
+    ${editMode ? `<a class="btn primary" href="#/exercicios?add=${t.id}">＋ Acrescentar exercício</a>
+      <p class="muted small">⇄ troca o exercício por outro do mesmo músculo · ✕ remove do treino.</p>` : ''}`;
+  $('#edit').onclick = () => { editMode = !editMode; renderTreino(id); };
+  const move = (i, d) => { const [x] = t.itens.splice(i, 1); t.itens.splice(i + d, 0, x); save(); renderTreino(id); };
+  view.querySelectorAll('[data-up]').forEach(b => b.onclick = () => move(+b.dataset.up, -1));
+  view.querySelectorAll('[data-down]').forEach(b => b.onclick = () => move(+b.dataset.down, 1));
+  view.querySelectorAll('[data-del]').forEach(b => b.onclick = () => {
+    const it = t.itens[+b.dataset.del];
+    if (!confirm(`Remover "${exName(it.ex)}" do ${t.nome}?`)) return;
+    t.itens.splice(+b.dataset.del, 1); save(); renderTreino(id); toast('Exercício removido');
+  });
+  if (editMode) return;
   $('#start').onclick = () => {
     if (active && active.treino !== id && !confirm('Há outro treino em andamento. Descartar e começar este?')) return;
     if (!active || active.treino !== id) startSession(t);
@@ -104,18 +124,22 @@ function renderTreino(id) {
 
 function startSession(t) {
   active = { treino: t.id, inicio: new Date().toISOString(), series: {}, aberto: 0 };
-  t.itens.forEach(it => {
-    const ll = lastLoad(it.ex);
-    active.series[it.ex] = Array.from({ length: it.series }, () => ({ kg: usesLoad(it.ex) && ll != null ? ll : '', reps: /^\d+$/.test(it.reps) ? it.reps : '', ok: false }));
-  });
+  t.itens.forEach(ensureSeries);
   saveActive();
+}
+// cria as séries de um exercício na sessão ativa (também cobre exercício trocado durante o treino)
+function ensureSeries(it) {
+  if (active.series[it.ex]) return;
+  const ll = lastLoad(it.ex);
+  active.series[it.ex] = Array.from({ length: it.series }, () => ({ kg: usesLoad(it.ex) && ll != null ? ll : '', reps: /^\d+$/.test(it.reps) ? it.reps : '', ok: false }));
 }
 
 function renderSessao() {
   if (!active) return (location.hash = '#/');
   const t = treinoById(active.treino);
   setHeader(t.nome, '#/treino/' + t.id); setTab('home');
-  const total = Object.values(active.series).flat();
+  t.itens.forEach(ensureSeries);
+  const total = t.itens.flatMap(it => active.series[it.ex]);
   const done = total.filter(s => s.ok).length;
   view.innerHTML = `
     <div class="session-head">
@@ -249,24 +273,157 @@ function beep() {
 }
 
 // ---------- Guia / infográfico ----------
-function renderExercicio(id) {
+const treinosUsing = id => db.treinos.filter(t => t.itens.some(i => i.ex === id));
+const exDefaults = id => ({ series: 3, reps: '12', descanso: 50, ...(EXERCISES[id]?.padrao || {}) });
+const thumbPose = ex => (ex.labels?.[1] === 'Evite' ? ex.S : ex.E);
+
+// contexto vindo do botão Trocar/Acrescentar da tela do treino: troca=t1|3 ou add=t1
+function parseCtx(query) {
+  const q = new URLSearchParams(query);
+  if (q.get('troca')) { const [treino, i] = q.get('troca').split('|'); return { treino, acao: 'sub', alvo: +i }; }
+  if (q.get('add')) return { treino: q.get('add'), acao: 'add' };
+  return null;
+}
+const ctxQuery = ctx => (!ctx ? '' : ctx.acao === 'sub' ? `troca=${ctx.treino}|${ctx.alvo}` : `add=${ctx.treino}`);
+
+function renderExercicio(id, query) {
   const ex = EXERCISES[id];
-  if (!ex) return (location.hash = '#/guia');
-  setHeader(ex.nome, true);
+  if (!ex) return (location.hash = '#/exercicios');
+  const ctx = parseCtx(query);
+  setHeader(ex.nome, true); setTab('exercicios');
   const ll = lastLoad(id);
+  const em = treinosUsing(id);
   view.innerHTML = `
-    <div class="chips"><span class="chip">${esc(ex.grupo)}</span><span class="chip">${esc(ex.musc)}</span>${ll != null ? `<span class="chip ok">Última: ${fmtKg(ll)}</span>` : ''}</div>
+    <div class="chips"><span class="chip">${esc(ex.grupo)}</span><span class="chip">${esc(ex.musc)}</span>${ll != null ? `<span class="chip ok">Última: ${fmtKg(ll)}</span>` : ''}
+    ${em.map(t => `<span class="chip on">No ${esc(t.nome)}</span>`).join('')}</div>
     <div class="card ig">${infographicHTML(id)}</div>
+    <button class="btn primary big" id="use">${ctx?.acao === 'sub' ? '⇄ Usar na troca' : '＋ Colocar em um treino'}</button>
     ${usesLoad(id) ? `<a class="btn ghost" href="#/desempenho?ex=${id}">Ver evolução de carga ›</a>` : ''}`;
+  $('#use').onclick = () => openSheet(id, ctx);
 }
 
-function renderGuia() {
-  setHeader('Guia de exercícios'); setTab('guia');
-  const groups = {};
-  Object.entries(EXERCISES).forEach(([id, ex]) => (groups[ex.grupo] ||= []).push([id, ex]));
-  view.innerHTML = Object.entries(groups).map(([g, list]) => `
-    <h2 class="section">${esc(g)}</h2>
-    <div class="grid">${list.map(([id, ex]) => `<a class="card thumb" href="#/ex/${id}">${poseSVG(ex.labels?.[1] === 'Evite' ? ex.S : ex.E, ex)}<span>${esc(ex.nome)}</span></a>`).join('')}</div>`).join('');
+let exGroup = null;
+function renderExercicios(query) {
+  setHeader('Exercícios'); setTab('exercicios');
+  const ctx = parseCtx(query);
+  const q = new URLSearchParams(query);
+  const groups = GROUP_ORDER.filter(g => Object.values(EXERCISES).some(e => e.grupo === g));
+  exGroup = q.get('m') || exGroup || groups[0];
+  if (!groups.includes(exGroup)) exGroup = groups[0];
+  const list = Object.entries(EXERCISES).filter(([, e]) => e.grupo === exGroup).sort((a, b) => a[1].nome.localeCompare(b[1].nome));
+  const ct = ctx && treinoById(ctx.treino);
+  const banner = !ct ? '' : ctx.acao === 'sub'
+    ? `<div class="banner">Escolha o exercício que vai <strong>substituir</strong> “${esc(exName(ct.itens[ctx.alvo]?.ex))}” no <strong>${esc(ct.nome)}</strong>. <a href="#/treino/${ct.id}">Cancelar</a></div>`
+    : `<div class="banner">Escolha o exercício para <strong>acrescentar</strong> no <strong>${esc(ct.nome)}</strong>. <a href="#/treino/${ct.id}">Cancelar</a></div>`;
+  const cq = ctxQuery(ctx);
+  view.innerHTML = `
+    ${banner}
+    <p class="lead small">Escolha o músculo, toque no exercício para ver o passo a passo e use <strong>＋</strong> para colocar num treino.</p>
+    <div class="musc-chips">${groups.map(g => `<button class="mchip ${g === exGroup ? 'on' : ''}" data-g="${esc(g)}">${esc(g)}<span>${Object.values(EXERCISES).filter(e => e.grupo === g).length}</span></button>`).join('')}</div>
+    <div class="ex-list">${list.map(([id, ex]) => {
+      const em = treinosUsing(id);
+      return `<div class="card exrow">
+        <a class="exrow-main" href="#/ex/${id}${cq ? '?' + cq : ''}">
+          <div class="exrow-img">${poseSVG(thumbPose(ex), ex)}</div>
+          <div class="grow"><strong>${esc(ex.nome)}</strong><small>${esc(ex.musc)}</small>
+          ${em.length ? `<small class="tags">${em.map(t => `<span>${esc(t.nome)}</span>`).join('')}</small>` : ''}</div>
+        </a>
+        <button class="add" data-add="${id}" aria-label="Colocar em um treino">${ctx?.acao === 'sub' ? '⇄' : '＋'}</button>
+      </div>`;
+    }).join('')}</div>`;
+  view.querySelectorAll('[data-g]').forEach(b => b.onclick = () => {
+    exGroup = b.dataset.g;
+    history.replaceState(null, '', `#/exercicios?m=${encodeURIComponent(exGroup)}${cq ? '&' + cq : ''}`);
+    renderExercicios(`m=${encodeURIComponent(exGroup)}${cq ? '&' + cq : ''}`);
+  });
+  view.querySelectorAll('[data-add]').forEach(b => b.onclick = () => openSheet(b.dataset.add, ctx));
+  const on = view.querySelector('.mchip.on'); on && on.scrollIntoView({ inline: 'center', block: 'nearest' });
+}
+
+// ---------- Folha "colocar no treino" ----------
+let sheet = null;
+function openSheet(exId, ctx) {
+  const t = treinoById(ctx?.treino) || db.treinos[0];
+  sheet = { ex: exId, treino: t.id, acao: ctx?.acao || 'add', alvo: ctx?.alvo, pos: null, ...exDefaults(exId) };
+  if (sheet.acao === 'sub' && sheet.alvo == null) sheet.alvo = sameGroupIndex(t, exId);
+  $('#sheetBg').hidden = false; $('#sheet').hidden = false;
+  document.body.classList.add('noscroll');
+  renderSheet();
+}
+function closeSheet() { sheet = null; $('#sheetBg').hidden = true; $('#sheet').hidden = true; document.body.classList.remove('noscroll'); }
+$('#sheetBg').onclick = closeSheet;
+function sameGroupIndex(t, exId) {
+  const i = t.itens.findIndex(it => EXERCISES[it.ex]?.grupo === EXERCISES[exId].grupo && it.ex !== exId);
+  return i >= 0 ? i : null;
+}
+function defaultPos(t) { const n = t.itens.length; return n && t.itens[n - 1].ex === 'cardio' ? n - 1 : n; }
+
+function renderSheet() {
+  const s = sheet, ex = EXERCISES[s.ex], t = treinoById(s.treino);
+  if (s.pos == null || s.pos > t.itens.length) s.pos = defaultPos(t);
+  const dup = t.itens.findIndex(it => it.ex === s.ex);
+  const blocked = dup >= 0 && !(s.acao === 'sub' && s.alvo === dup);
+  $('#sheet').innerHTML = `
+    <div class="sheet-handle"></div>
+    <div class="sheet-head">${poseSVG(thumbPose(ex), ex)}<div><small>${esc(ex.grupo)}</small><strong>${esc(ex.nome)}</strong></div></div>
+
+    <label class="lbl">1. Em qual treino?</label>
+    <div class="seg">${db.treinos.map(x => `<button data-t="${x.id}" class="${x.id === s.treino ? 'on' : ''}">${esc(x.nome)}</button>`).join('')}</div>
+
+    <label class="lbl">2. O que fazer?</label>
+    <div class="seg">
+      <button data-a="sub" class="${s.acao === 'sub' ? 'on' : ''}">⇄ Substituir</button>
+      <button data-a="add" class="${s.acao === 'add' ? 'on' : ''}">＋ Acrescentar</button>
+    </div>
+
+    ${s.acao === 'sub' ? `<label class="lbl">3. Substituir qual exercício?</label>
+      <div class="pick">${t.itens.map((it, i) => `<button data-alvo="${i}" class="${s.alvo === i ? 'on' : ''} ${EXERCISES[it.ex]?.grupo === ex.grupo ? 'same' : ''}">
+        <span class="n">${i + 1}</span><span class="grow">${esc(exName(it.ex))}<small>${esc(EXERCISES[it.ex]?.grupo || '')}${EXERCISES[it.ex]?.grupo === ex.grupo ? ' · mesmo músculo' : ''}</small></span></button>`).join('')}</div>`
+    : `<label class="lbl">3. Em que posição?</label>
+      <select id="pos">${Array.from({ length: t.itens.length + 1 }, (_, p) => `<option value="${p}" ${p === s.pos ? 'selected' : ''}>${p === 0 ? 'No início' : `Depois de ${p}. ${esc(exName(t.itens[p - 1].ex))}`}</option>`).join('')}</select>`}
+
+    <label class="lbl">4. Séries, repetições e descanso</label>
+    <div class="trio">
+      <label>Séries<input id="shS" inputmode="numeric" value="${s.series}"></label>
+      <label>Reps<input id="shR" value="${esc(s.reps)}"></label>
+      <label>Descanso (s)<input id="shD" inputmode="numeric" value="${s.descanso}"></label>
+    </div>
+
+    ${blocked ? `<p class="warn small">Este exercício já está no ${esc(t.nome)} (posição ${dup + 1}).</p>` : ''}
+    <button class="btn primary big" id="shOk" ${blocked || (s.acao === 'sub' && s.alvo == null) ? 'disabled' : ''}>
+      ${s.acao === 'sub' ? (s.alvo == null ? 'Escolha o exercício a substituir' : `Substituir no ${esc(t.nome)}`) : `Acrescentar ao ${esc(t.nome)}`}</button>
+    <button class="btn ghost" id="shCancel">Cancelar</button>`;
+
+  const keep = () => { s.series = Math.max(1, parseInt($('#shS').value) || 1); s.reps = $('#shR').value.trim() || '12'; s.descanso = Math.max(0, parseInt($('#shD').value) || 0); };
+  $('#sheet').querySelectorAll('[data-t]').forEach(b => b.onclick = () => {
+    keep(); s.treino = b.dataset.t; s.pos = null;
+    if (s.acao === 'sub') s.alvo = sameGroupIndex(treinoById(s.treino), s.ex);
+    renderSheet();
+  });
+  $('#sheet').querySelectorAll('[data-a]').forEach(b => b.onclick = () => {
+    keep(); s.acao = b.dataset.a;
+    if (s.acao === 'sub' && s.alvo == null) s.alvo = sameGroupIndex(t, s.ex);
+    renderSheet();
+  });
+  $('#sheet').querySelectorAll('[data-alvo]').forEach(b => b.onclick = () => { keep(); s.alvo = +b.dataset.alvo; renderSheet(); });
+  const pos = $('#pos'); if (pos) pos.onchange = () => { s.pos = +pos.value; };
+  $('#shCancel').onclick = closeSheet;
+  $('#shOk').onclick = () => {
+    keep();
+    const item = { ex: s.ex, series: s.series, reps: s.reps, descanso: s.descanso };
+    let msg;
+    if (s.acao === 'sub') { msg = `${exName(t.itens[s.alvo].ex)} → ${ex.nome}`; t.itens[s.alvo] = item; }
+    else { t.itens.splice(s.pos, 0, item); msg = `${ex.nome} acrescentado`; }
+    save(); closeSheet(); editMode = true;
+    location.hash = '#/treino/' + t.id;
+    toast(`${t.nome}: ${msg}`);
+  };
+}
+
+let toastTimer;
+function toast(msg) {
+  const el = $('#toast'); el.textContent = msg; el.hidden = false;
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => (el.hidden = true), 2600);
 }
 
 // ---------- Desempenho ----------
@@ -401,7 +558,13 @@ function renderAjustes() {
       <h3>Instalar no celular</h3>
       <p class="muted">iPhone: Safari → Compartilhar → "Adicionar à Tela de Início".<br>Android: Chrome → menu ⋮ → "Instalar app" ou "Adicionar à tela inicial".</p>
     </div>
+    <button class="btn ghost" id="restore">Restaurar os 3 treinos originais (mantém o histórico)</button>
     <button class="btn ghost danger" id="reset">Apagar tudo e restaurar dados iniciais</button>`;
+
+  $('#restore').onclick = () => {
+    if (!confirm('Voltar os Treinos 1, 2 e 3 para o protocolo original? Trocas e acréscimos serão desfeitos; o histórico continua.')) return;
+    db.treinos = JSON.parse(JSON.stringify(SEED_WORKOUTS)); save(); toast('Treinos restaurados'); renderAjustes();
+  };
 
   $('#exp').onclick = () => {
     const blob = new Blob([JSON.stringify(db, null, 2)], { type: 'application/json' });
@@ -434,10 +597,12 @@ function route() {
   const [path, query = ''] = location.hash.slice(1).split('?');
   const parts = path.split('/').filter(Boolean);
   window.scrollTo(0, 0);
+  if (sheet) closeSheet();
+  if (!['treino', 'exercicios', 'ex'].includes(parts[0])) editMode = false;
   if (parts[0] === 'treino') renderTreino(parts[1]);
   else if (parts[0] === 'sessao') renderSessao();
-  else if (parts[0] === 'ex') renderExercicio(parts[1]);
-  else if (parts[0] === 'guia') renderGuia();
+  else if (parts[0] === 'ex') renderExercicio(parts[1], query);
+  else if (parts[0] === 'exercicios' || parts[0] === 'guia') renderExercicios(query);
   else if (parts[0] === 'desempenho') renderDesempenho(query);
   else if (parts[0] === 'ajustes') renderAjustes();
   else renderHome();

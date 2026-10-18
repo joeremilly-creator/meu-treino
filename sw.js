@@ -1,6 +1,6 @@
 // Cache para funcionar offline na academia. Páginas: rede primeiro; demais arquivos: cache primeiro.
-const CACHE = 'meutreino-v1';
-const ASSETS = ['./', 'index.html', 'style.css', 'app.js', 'exercises.js', 'data.js', 'manifest.webmanifest', 'icon.svg',
+const CACHE = 'meutreino-v2';
+const ASSETS = ['./', 'index.html', 'style.css', 'app.js', 'exercises.js', 'exercises-extra.js', 'data.js', 'manifest.webmanifest', 'icon.svg',
   'https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js'];
 
 self.addEventListener('install', e => {

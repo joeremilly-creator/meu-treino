@@ -20,6 +20,11 @@
 
   <main id="view"></main>
 
+  <div class="sheet-bg" id="sheetBg" hidden></div>
+  <div class="sheet" id="sheet" hidden></div>
+
+  <div class="toast" id="toast" hidden></div>
+
   <div class="rest" id="rest" hidden>
     <div class="rest-label">Descanso</div>
     <div class="rest-time" id="restTime">0:50</div>
@@ -32,13 +37,14 @@
 
   <nav class="tabs">
     <a href="#/" data-tab="home"><span>🏠</span>Treinos</a>
-    <a href="#/guia" data-tab="guia"><span>📖</span>Guia</a>
+    <a href="#/exercicios" data-tab="exercicios"><span>💪</span>Exercícios</a>
     <a href="#/desempenho" data-tab="desempenho"><span>📈</span>Desempenho</a>
     <a href="#/ajustes" data-tab="ajustes"><span>⚙️</span>Ajustes</a>
   </nav>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
   <script src="exercises.js"></script>
+  <script src="exercises-extra.js"></script>
   <script src="data.js"></script>
   <script src="app.js"></script>
 </body>

@@ -179,7 +179,7 @@ function exBox(ex) {
       if (t === 'r') { add(a, b); add(a + c, b + d); }
       else if (t === 'l' || t === 'k') { add(a, b); add(c, d); }
       else if (t === 'c') add(a, b, c + 2);
-      else if (t === 'd') add(a, b, 9);
+      else if (t === 'd' || t === 'v') add(a, b, 9);
       else if (t === 'b') add(a, b, 6);
       else if (t === 'x') add(a, b - 16, 10);
     }
@@ -212,6 +212,7 @@ function poseSVG(pose, ex) {
   for (const p of props) {
     const [t, a, b] = p;
     if (t === 'd') parts.push(`<g class="ig-weight"><rect x="${a - 7}" y="${b - 2}" width="14" height="4" rx="1"/><rect x="${a - 9}" y="${b - 5}" width="4" height="10" rx="1"/><rect x="${a + 5}" y="${b - 5}" width="4" height="10" rx="1"/></g>`);
+    else if (t === 'v') parts.push(`<g class="ig-weight"><rect x="${a - 2}" y="${b - 7}" width="4" height="14" rx="1"/><rect x="${a - 5}" y="${b - 9}" width="10" height="4" rx="1"/><rect x="${a - 5}" y="${b + 5}" width="10" height="4" rx="1"/></g>`);
     else if (t === 'b') parts.push(`<circle cx="${a}" cy="${b}" r="6" class="ig-weight"/>`);
     else if (t === 'x') parts.push(`<g class="ig-wrong"><circle cx="${a}" cy="${b - 16}" r="9"/><path d="M${a - 4} ${b - 20}l8 8M${a + 4} ${b - 20}l-8 8"/></g>`);
   }
