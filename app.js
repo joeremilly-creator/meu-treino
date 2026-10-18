@@ -22,6 +22,11 @@ if (!db.perfil) {
   db.sessoes.forEach(s => { const m = SEED_SESSION_META[s.id]; if (m && s.nota == null) Object.assign(s, m); });
   db.versao = 2; save();
 }
+// v3: peso inicial de 13/09 (114,6 kg) que não tinha sido registrado
+if (db.versao < 3) {
+  if (!db.peso.some(p => p.data === '2026-09-13')) db.peso.push({ data: '2026-09-13', kg: 114.6 });
+  db.versao = 3; save();
+}
 let active = load(KEY_ACTIVE, null);
 let editMode = false;
 const charts = [];

@@ -57,7 +57,8 @@ const SEED_SESSIONS = [
     cargas: { crucifixo_maquina: 50, desenvolvimento_maquina: 40, triceps_testa_halter: 15 } },
 ];
 
-const SEED_BODYWEIGHT = [{ data: '2026-10-08', kg: 104.4 }];
+// 13/09 = peso no início (data da avaliação), informado depois pelo Joe
+const SEED_BODYWEIGHT = [{ data: '2026-09-13', kg: 114.6 }, { data: '2026-10-08', kg: 104.4 }];
 
 // Avaliação inicial (questionário de 13/09/2026 no app anterior)
 const SEED_PERFIL = {
