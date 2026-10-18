@@ -58,3 +58,17 @@ const SEED_SESSIONS = [
 ];
 
 const SEED_BODYWEIGHT = [{ data: '2026-10-08', kg: 104.4 }];
+
+// Avaliação inicial (questionário de 13/09/2026 no app anterior)
+const SEED_PERFIL = {
+  nome: 'Joe', idade: 39, altura: 177, sexo: 'Homem', objetivo: 'Crescer e Secar', avaliadoEm: '2026-09-13',
+  experiencia: 'Intermediário', tecnica: 'Intermediário', metaSemanal: 3,
+  motivacao: 'Autoestima',
+  sonho: 'Alguém que passa credibilidade no que fala, já que o seu próprio corpo está bem.',
+};
+
+// Nota (0–10) e esforço (1 leve, 2 moderado, 3 intenso) das sessões importadas
+const SEED_SESSION_META = {
+  'imp-1': { nota: 5, esforco: 3 }, 'imp-2': { nota: 10, esforco: 3 }, 'imp-3': { nota: 10, esforco: 3 },
+  'imp-4': { nota: 10, esforco: 3 }, 'imp-5': { nota: 10, esforco: 3 }, 'imp-6': { nota: 10, esforco: 3 },
+};

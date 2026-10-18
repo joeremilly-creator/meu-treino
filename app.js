@@ -16,6 +16,12 @@ if (!db) {
   db = { versao: 1, treinos: SEED_WORKOUTS, sessoes: SEED_SESSIONS, peso: SEED_BODYWEIGHT };
   save();
 }
+// v2: perfil da avaliação + nota/esforço das sessões importadas (vale também para quem já usava a v1)
+if (!db.perfil) {
+  db.perfil = JSON.parse(JSON.stringify(SEED_PERFIL));
+  db.sessoes.forEach(s => { const m = SEED_SESSION_META[s.id]; if (m && s.nota == null) Object.assign(s, m); });
+  db.versao = 2; save();
+}
 let active = load(KEY_ACTIVE, null);
 let editMode = false;
 const charts = [];
@@ -233,7 +239,8 @@ function finishSession() {
     if (kgs.length) cargas[ex] = Math.max(...kgs);
   }
   const duracao = Math.round((Date.now() - new Date(active.inicio)) / 1000);
-  db.sessoes.push({ id: 's' + Date.now(), treino: t.id, data: new Date().toISOString(), duracao, cargas, series });
+  const sessao = { id: 's' + Date.now(), treino: t.id, data: new Date().toISOString(), duracao, cargas, series };
+  db.sessoes.push(sessao);
   save();
   active = null; saveActive(); stopRest();
   view.innerHTML = `<div class="done-screen"><div class="big-emoji">💪</div><h2>Treino concluído!</h2>
@@ -243,7 +250,16 @@ function finishSession() {
       const diff = prev != null ? kg - prev : null;
       return `<li>${esc(exName(ex))}: <strong>${fmtKg(kg)}</strong>${diff ? ` <span class="${diff > 0 ? 'ok' : 'warn'}">${diff > 0 ? '▲' : '▼'} ${fmtKg(Math.abs(diff))}</span>` : ''}</li>`;
     }).join('')}</ul>` : ''}
+    <div class="card rate">
+      <span class="kicker">Como foi o treino?</span>
+      <div class="seg" id="effSeg">${Object.entries(ESFORCO).map(([v, l]) => `<button data-eff="${v}">${l}</button>`).join('')}</div>
+      <small class="muted">Nota de 0 a 10</small>
+      <div class="notas" id="notaSeg">${Array.from({ length: 11 }, (_, n) => `<button data-nota="${n}">${n}</button>`).join('')}</div>
+    </div>
     <a class="btn primary" href="#/desempenho">Ver desempenho</a><a class="btn ghost" href="#/">Voltar ao início</a></div>`;
+  const mark = (sel, attr, val) => view.querySelectorAll(sel + ' button').forEach(b => b.classList.toggle('on', b.dataset[attr] === String(val)));
+  view.querySelectorAll('[data-eff]').forEach(b => b.onclick = () => { sessao.esforco = +b.dataset.eff; save(); mark('#effSeg', 'eff', sessao.esforco); });
+  view.querySelectorAll('[data-nota]').forEach(b => b.onclick = () => { sessao.nota = +b.dataset.nota; save(); mark('#notaSeg', 'nota', sessao.nota); });
 }
 
 // ---------- Descanso ----------
@@ -429,69 +445,124 @@ function toast(msg) {
 // ---------- Desempenho ----------
 function cssVar(n) { return getComputedStyle(document.documentElement).getPropertyValue(n).trim(); }
 
+const ESFORCO = { 1: 'Leve', 2: 'Moderado', 3: 'Intenso' };
+const NIVEIS = { 'Iniciante': 25, 'Intermediário': 50, 'Avançado': 75, 'Muito avançado': 100 };
+
+function imcInfo(kg, cm) {
+  const imc = kg / ((cm / 100) ** 2);
+  const faixas = [
+    [18.5, 'Abaixo do peso', 50, 'warn'], [25, 'Peso normal', 100, 'ok'], [30, 'Sobrepeso', 60, 'warn'],
+    [35, 'Obesidade grau I', 25, 'bad'], [40, 'Obesidade grau II', 15, 'bad'], [Infinity, 'Obesidade grau III', 10, 'bad'],
+  ];
+  const [, classe, comp, tom] = faixas.find(f => imc < f[0]);
+  return { imc, classe, comp, tom };
+}
+const pesoOrdenado = () => [...db.peso].sort((a, b) => a.data.localeCompare(b.data));
+const pesoAtual = () => pesoOrdenado().pop()?.kg;
+const fmtNum = (n, d = 1) => n.toLocaleString('pt-BR', { minimumFractionDigits: d, maximumFractionDigits: d });
+
+// Indicadores no mesmo formato da avaliação: experiência, técnica e composição (0–100) + frequência real das últimas 4 semanas
+function indicadores() {
+  const p = db.perfil;
+  const kg = pesoAtual();
+  const info = kg ? imcInfo(kg, p.altura) : null;
+  const desde = Date.now() - 28 * 864e5;
+  const recentes = db.sessoes.filter(s => new Date(s.data) >= desde).length;
+  const exp = NIVEIS[p.experiencia] ?? 50, tec = NIVEIS[p.tecnica] ?? 50, comp = info ? info.comp : 50;
+  return {
+    info, exp, tec, comp, recentes,
+    freq: Math.min(100, Math.round(recentes / (p.metaSemanal * 4) * 100)),
+    score: Math.round((exp + tec + comp) / 3),
+  };
+}
+
+let perfTab = 'treinos';
 function renderDesempenho(query) {
   setHeader('Desempenho'); setTab('desempenho');
   destroyCharts();
+  const q = new URLSearchParams(query);
+  if (q.get('ex')) perfTab = 'treinos';
+  if (q.get('aba')) perfTab = q.get('aba');
+  view.innerHTML = `
+    <div class="seg perf-tabs">
+      <button data-aba="treinos" class="${perfTab === 'treinos' ? 'on' : ''}">🏋️ Treinos</button>
+      <button data-aba="peso" class="${perfTab === 'peso' ? 'on' : ''}">⚖️ Peso</button>
+      <button data-aba="perfil" class="${perfTab === 'perfil' ? 'on' : ''}">⭐ Perfil</button>
+    </div>
+    <div id="perf"></div>`;
+  view.querySelectorAll('[data-aba]').forEach(b => b.onclick = () => {
+    perfTab = b.dataset.aba; history.replaceState(null, '', '#/desempenho?aba=' + perfTab); renderDesempenho('aba=' + perfTab);
+  });
+  const opts = chartBase();
+  if (perfTab === 'peso') renderPerfPeso(opts);
+  else if (perfTab === 'perfil') renderPerfPerfil(opts);
+  else renderPerfTreinos(q, opts);
+}
+
+function chartBase() {
+  const grid = cssVar('--line'), txt = cssVar('--muted');
+  Chart.defaults.color = txt; Chart.defaults.font.family = getComputedStyle(document.body).fontFamily;
+  return {
+    grid, acc: cssVar('--accent'), acc2: cssVar('--accent-2'),
+    base: {
+      responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } },
+      scales: { x: { grid: { display: false } }, y: { grid: { color: grid }, beginAtZero: false } },
+    },
+  };
+}
+
+function renderPerfTreinos(q, { grid, acc, acc2, base }) {
   const ss = sortedSessions();
   const loadEx = [...new Set(db.treinos.flatMap(t => t.itens.map(i => i.ex)))].filter(usesLoad);
-  const sel = new URLSearchParams(query).get('ex') || loadEx.find(e => lastLoad(e) != null) || loadEx[0];
+  const sel = q.get('ex') || loadEx.find(e => lastLoad(e) != null) || loadEx[0];
   const weeks = {};
   ss.forEach(s => { const k = weekStart(s.data).toISOString().slice(0, 10); weeks[k] = (weeks[k] || 0) + 1; });
   const nWeeks = ss.length ? Math.floor((weekStart(new Date()) - weekStart(ss[0].data)) / 6048e5) + 1 : 0;
+  const thisWeek = ss.filter(s => new Date(s.data) >= weekStart(new Date())).length;
   const avgDur = ss.length ? ss.reduce((a, s) => a + (s.duracao || 0), 0) / ss.length : 0;
   const prs = loadEx.map(ex => {
     const pts = ss.filter(s => s.cargas?.[ex] != null).map(s => s.cargas[ex]);
     return pts.length ? { ex, max: Math.max(...pts), first: pts[0], last: pts[pts.length - 1], n: pts.length } : null;
   }).filter(Boolean);
-  const peso = [...db.peso].sort((a, b) => a.data.localeCompare(b.data));
 
-  view.innerHTML = `
-    <section class="stats">
-      <div><strong>${ss.length}</strong><small>treinos</small></div>
-      <div><strong>${nWeeks ? (ss.length / nWeeks).toFixed(1).replace('.', ',') : '0'}</strong><small>por semana</small></div>
+  $('#perf').innerHTML = `
+    <section class="stats four">
+      <div><strong class="acc">${thisWeek}</strong><small>esta semana</small></div>
+      <div><strong>${ss.length}</strong><small>concluídos</small></div>
+      <div><strong>${nWeeks ? fmtNum(ss.length / nWeeks) : '0'}</strong><small>por semana</small></div>
       <div><strong>${fmtDur(avgDur)}</strong><small>duração média</small></div>
     </section>
 
     <div class="card chart-card">
-      <h3>Evolução de carga</h3>
+      <div class="card-title"><div><span class="kicker">Frequência semanal</span><small class="muted">Seu ritmo de treinos nas últimas semanas</small></div>
+      <div class="badge"><strong>${thisWeek}</strong><small>semana</small></div></div>
+      <div class="chart-box short"><canvas id="cFreq"></canvas></div>
+      <p class="muted small">Meta: ${db.perfil.metaSemanal} treinos por semana (linha tracejada).</p>
+    </div>
+
+    <div class="card chart-card">
+      <span class="kicker">Evolução de carga</span>
       <select id="exSel">${loadEx.map(e => `<option value="${e}" ${e === sel ? 'selected' : ''}>${esc(exName(e))}</option>`).join('')}</select>
       <div class="chart-box"><canvas id="cLoad"></canvas></div>
       <p class="muted small" id="loadNote"></p>
     </div>
 
-    <div class="card chart-card">
-      <h3>Treinos por semana</h3>
-      <div class="chart-box short"><canvas id="cFreq"></canvas></div>
-    </div>
-
-    <div class="card chart-card">
-      <h3>Peso corporal</h3>
-      <div class="chart-box short"><canvas id="cPeso"></canvas></div>
-      <form class="inline-form" id="pesoForm">
-        <input type="date" id="pesoData" value="${new Date().toISOString().slice(0, 10)}">
-        <input inputmode="decimal" id="pesoKg" placeholder="kg">
-        <button class="btn primary">Registrar</button>
-      </form>
-    </div>
-
     <div class="card">
-      <h3>Recordes por exercício</h3>
+      <span class="kicker">Recordes por exercício</span>
       ${prs.length ? `<table class="prs"><thead><tr><th>Exercício</th><th>Máx.</th><th>Evolução</th></tr></thead><tbody>
       ${prs.map(p => { const d = p.last - p.first; return `<tr><td><a href="#/desempenho?ex=${p.ex}">${esc(exName(p.ex))}</a></td><td>${fmtKg(p.max)}</td><td class="${d > 0 ? 'ok' : 'muted'}">${p.n < 2 ? '—' : (d > 0 ? '+' : '') + fmtKg(d)}</td></tr>`; }).join('')}
       </tbody></table>` : '<p class="muted">Sem cargas registradas ainda.</p>'}
     </div>
 
     <div class="card">
-      <h3>Histórico</h3>
-      <ul class="history">${[...ss].reverse().map(s => `<li><span>${fmtDateLong(s.data)}</span><strong>${esc(treinoById(s.treino)?.nome || s.treino)}</strong><span class="muted">${s.duracao ? fmtDur(s.duracao) : ''}</span>${s.importado ? '' : `<button class="del" data-del="${s.id}" aria-label="Apagar">✕</button>`}</li>`).join('')}</ul>
+      <span class="kicker">Histórico de treinos</span>
+      <ul class="hist">${[...ss].reverse().map(s => `<li>
+        <div class="grow"><strong>${esc(treinoById(s.treino)?.nome || s.treino)}</strong>
+        <small>${fmtDateLong(s.data)}${s.duracao ? ' · ' + fmtDur(s.duracao) : ''}${s.esforco ? ` · <span class="eff e${s.esforco}">${ESFORCO[s.esforco]}</span>` : ''}</small></div>
+        ${s.nota != null ? `<span class="nota" title="Nota do treino">${s.nota}</span>` : ''}
+        ${s.importado ? '' : `<button class="del" data-del="${s.id}" aria-label="Apagar">✕</button>`}
+      </li>`).join('')}</ul>
     </div>`;
-
-  const grid = cssVar('--line'), txt = cssVar('--muted'), acc = cssVar('--accent'), acc2 = cssVar('--accent-2');
-  Chart.defaults.color = txt; Chart.defaults.font.family = getComputedStyle(document.body).fontFamily;
-  const baseOpts = {
-    responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } },
-    scales: { x: { grid: { display: false } }, y: { grid: { color: grid }, beginAtZero: false } },
-  };
 
   const drawLoad = ex => {
     const pts = ss.filter(s => s.cargas?.[ex] != null);
@@ -502,7 +573,7 @@ function renderDesempenho(query) {
     charts.push(new Chart($('#cLoad'), {
       type: 'line',
       data: { labels: pts.map(s => fmtDate(s.data)), datasets: [{ data: pts.map(s => s.cargas[ex]), borderColor: acc, backgroundColor: acc, pointRadius: 5, tension: 0.25 }] },
-      options: { ...baseOpts, plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => fmtKg(c.parsed.y) } } } },
+      options: { ...base, plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => fmtKg(c.parsed.y) } } } },
     }));
   };
   drawLoad(sel);
@@ -512,27 +583,175 @@ function renderDesempenho(query) {
   const wk = [];
   if (ss.length) for (let d = weekStart(ss[0].data); d <= new Date(); d.setDate(d.getDate() + 7)) wk.push(d.toISOString().slice(0, 10));
   wk.forEach(k => (weeks[k] ||= 0));
+  const meta = db.perfil.metaSemanal;
   charts.push(new Chart($('#cFreq'), {
-    type: 'bar',
-    data: { labels: wk.map(k => fmtDate(k + 'T12:00:00')), datasets: [{ data: wk.map(k => weeks[k]), backgroundColor: acc2, borderRadius: 6, maxBarThickness: 28 }] },
-    options: { ...baseOpts, scales: { x: { grid: { display: false } }, y: { grid: { color: grid }, beginAtZero: true, ticks: { stepSize: 1 } } } },
-  }));
-  charts.push(new Chart($('#cPeso'), {
-    type: 'line',
-    data: { labels: peso.map(p => fmtDate(p.data + 'T12:00:00')), datasets: [{ data: peso.map(p => p.kg), borderColor: acc2, backgroundColor: acc2, pointRadius: 5, tension: 0.25 }] },
-    options: { ...baseOpts, plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => fmtKg(c.parsed.y) } } } },
+    data: {
+      labels: wk.map(k => 'Sem ' + fmtDate(k + 'T12:00:00')),
+      datasets: [
+        { type: 'bar', data: wk.map(k => weeks[k]), backgroundColor: acc, borderRadius: 6, maxBarThickness: 28 },
+        { type: 'line', data: wk.map(() => meta), borderColor: acc2, borderDash: [5, 4], borderWidth: 2, pointRadius: 0 },
+      ],
+    },
+    options: { ...base, scales: { x: { grid: { display: false } }, y: { grid: { color: grid }, beginAtZero: true, suggestedMax: meta + 1, ticks: { stepSize: 1 } } } },
   }));
 
+  view.querySelectorAll('[data-del]').forEach(b => b.onclick = () => {
+    if (!confirm('Apagar este treino do histórico?')) return;
+    db.sessoes = db.sessoes.filter(s => s.id !== b.dataset.del); save(); renderDesempenho('aba=treinos');
+  });
+}
+
+function renderPerfPeso({ acc2, base }) {
+  const peso = pesoOrdenado();
+  const atual = peso[peso.length - 1], inicial = peso[0];
+  const info = atual ? imcInfo(atual.kg, db.perfil.altura) : null;
+  const diff = atual && inicial ? atual.kg - inicial.kg : 0;
+  $('#perf').innerHTML = `
+    <div class="card">
+      <span class="kicker">Registrar peso</span>
+      <form class="inline-form" id="pesoForm">
+        <input type="date" id="pesoData" value="${new Date().toISOString().slice(0, 10)}">
+        <input inputmode="decimal" id="pesoKg" placeholder="kg">
+        <button class="btn primary">Salvar</button>
+      </form>
+    </div>
+    ${atual ? `<section class="stats">
+      <div><strong>${fmtNum(atual.kg)}</strong><small>kg atual</small></div>
+      <div><strong class="${diff < 0 ? 'ok' : diff > 0 ? 'warn' : ''}">${diff ? (diff > 0 ? '+' : '') + fmtNum(diff) : '0'}</strong><small>kg desde ${fmtDate(inicial.data + 'T12:00:00')}</small></div>
+      <div><strong class="t-${info.tom}">${fmtNum(info.imc)}</strong><small>IMC</small></div>
+    </section>` : ''}
+    <div class="card chart-card">
+      <span class="kicker">Evolução do peso</span>
+      <small class="muted">Acompanhe sua mudança corporal em kg</small>
+      <div class="chart-box"><canvas id="cPeso"></canvas></div>
+    </div>
+    <div class="card">
+      <span class="kicker">Histórico de peso</span>
+      <ul class="hist">${[...peso].reverse().map((p, i, arr) => {
+        const prev = arr[i + 1]; const d = prev ? p.kg - prev.kg : null;
+        return `<li><div class="grow"><strong>${fmtNum(p.kg)} kg</strong><small>${new Date(p.data + 'T12:00:00').toLocaleDateString('pt-BR', { day: '2-digit', month: 'long', year: 'numeric' })}</small></div>
+          ${d ? `<span class="${d < 0 ? 'ok' : 'warn'} small">${d > 0 ? '▲' : '▼'} ${fmtNum(Math.abs(d))}</span>` : ''}
+          <button class="del" data-delp="${p.data}" aria-label="Apagar">✕</button></li>`;
+      }).join('') || '<li class="muted">Nenhum registro ainda.</li>'}</ul>
+    </div>`;
+
+  if (peso.length) {
+    const kgs = peso.map(p => p.kg);
+    charts.push(new Chart($('#cPeso'), {
+      type: 'line',
+      data: { labels: peso.map(p => fmtDate(p.data + 'T12:00:00')), datasets: [{ data: kgs, borderColor: acc2, backgroundColor: acc2, pointRadius: 5, tension: 0.25 }] },
+      options: {
+        ...base, plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => fmtKg(c.parsed.y) } } },
+        scales: { ...base.scales, y: { ...base.scales.y, suggestedMin: Math.floor(Math.min(...kgs) - 2), suggestedMax: Math.ceil(Math.max(...kgs) + 2) } },
+      },
+    }));
+  }
   $('#pesoForm').onsubmit = e => {
     e.preventDefault();
     const kg = parseFloat($('#pesoKg').value.replace(',', '.')), data = $('#pesoData').value;
     if (!kg || !data) return;
-    db.peso = db.peso.filter(p => p.data !== data).concat({ data, kg }); save(); renderDesempenho(query);
+    db.peso = db.peso.filter(p => p.data !== data).concat({ data, kg }); save(); toast('Peso registrado'); renderDesempenho('aba=peso');
   };
-  view.querySelectorAll('[data-del]').forEach(b => b.onclick = () => {
-    if (!confirm('Apagar este treino do histórico?')) return;
-    db.sessoes = db.sessoes.filter(s => s.id !== b.dataset.del); save(); renderDesempenho(query);
+  view.querySelectorAll('[data-delp]').forEach(b => b.onclick = () => {
+    if (!confirm('Apagar este registro de peso?')) return;
+    db.peso = db.peso.filter(p => p.data !== b.dataset.delp); save(); renderDesempenho('aba=peso');
   });
+}
+
+function ring(value, color) {
+  const r = 40, c = 2 * Math.PI * r, off = c * (1 - value / 100);
+  return `<svg viewBox="0 0 100 100" class="ring"><circle cx="50" cy="50" r="${r}" class="ring-bg"/>
+    <circle cx="50" cy="50" r="${r}" class="ring-fg" style="stroke:${color}" stroke-dasharray="${c.toFixed(1)}" stroke-dashoffset="${off.toFixed(1)}" transform="rotate(-90 50 50)"/>
+    <text x="50" y="52" class="ring-num">${value}</text><text x="50" y="68" class="ring-sub">/100</text></svg>`;
+}
+const nivelTxt = v => (v >= 100 ? 'Excelente' : v >= 75 ? 'Avançado' : v >= 50 ? 'Intermediário' : v >= 25 ? 'Em construção' : 'Inicial');
+
+function renderPerfPerfil({ grid, acc, acc2, base }) {
+  const p = db.perfil, k = indicadores(), ss = sortedSessions();
+  const peso = pesoOrdenado();
+  const ini = peso[0], atu = peso[peso.length - 1];
+  const dias = Math.max(0, Math.floor((Date.now() - new Date(p.avaliadoEm + 'T12:00:00')) / 864e5));
+  const subiram = [...new Set(db.treinos.flatMap(t => t.itens.map(i => i.ex)))].filter(ex => {
+    const pts = ss.filter(s => s.cargas?.[ex] != null).map(s => s.cargas[ex]);
+    return pts.length > 1 && pts[pts.length - 1] > pts[0];
+  }).length;
+  const bars = [['Experiência', k.exp, p.experiencia, '#2fd3a4'], ['Execução técnica', k.tec, p.tecnica, '#f5b83d'], ['Composição', k.comp, k.info?.classe || '—', '#9b6bff']];
+
+  $('#perf').innerHTML = `
+    ${k.info ? `<div class="card imc-card">
+      <div class="imc-box t-${k.info.tom}"><strong>${fmtNum(k.info.imc)}</strong><small>IMC</small></div>
+      <div class="grow"><strong>${k.info.classe}</strong><small>${fmtNum(atu.kg)} kg · ${p.altura} cm</small>
+      <small class="muted">Calculado com o último peso registrado</small></div>
+    </div>` : ''}
+
+    <div class="card">
+      <span class="kicker">Score geral de performance</span>
+      <small class="muted">Leitura do seu perfil de treino (média de experiência, técnica e composição).</small>
+      <div class="score">
+        ${ring(k.score, acc)}
+        <div class="score-bars">${bars.map(([n, v, l, c]) => `
+          <div class="sb"><div class="sb-top"><span>${n}</span><strong>${v}/100</strong></div>
+          <div class="sb-track"><span style="width:${v}%;background:${c}"></span></div><small class="muted">${esc(l)}</small></div>`).join('')}
+        </div>
+      </div>
+      <p class="muted small">Quanto mais consistente, mais esse score evolui com você.</p>
+    </div>
+
+    <div class="card chart-card">
+      <span class="kicker">Indicadores de estilo de vida</span>
+      <small class="muted">Os pilares que sustentam sua evolução. Frequência = treinos dos últimos 28 dias ÷ meta (${k.recentes} de ${p.metaSemanal * 4}).</small>
+      <div class="chart-box short"><canvas id="cInd"></canvas></div>
+    </div>
+
+    <div class="card mind">
+      <span class="kicker">Mentalidade</span>
+      <small class="muted">O combustível emocional por trás da sua transformação.</small>
+      <div class="quote"><small>O que te motiva</small><p>“${esc(p.motivacao)}”</p></div>
+      <div class="quote"><small>Seu sonho</small><p>“${esc(p.sonho)}”</p></div>
+    </div>
+
+    <div class="card">
+      <span class="kicker">Sua evolução desde a avaliação</span>
+      <small class="muted">Resultados reais registrados desde ${fmtDate(p.avaliadoEm + 'T12:00:00')} (${dias} dias).</small>
+      <div class="evo">
+        <div><strong>${ss.length}</strong><small>treinos feitos</small></div>
+        <div><strong>${ini && atu ? (atu.kg - ini.kg > 0 ? '+' : '') + fmtNum(atu.kg - ini.kg) + ' kg' : '—'}</strong><small>peso</small></div>
+        <div><strong>${ini && atu ? fmtNum(imcInfo(ini.kg, p.altura).imc) + ' → ' + fmtNum(k.info.imc) : '—'}</strong><small>IMC</small></div>
+        <div><strong>${subiram}</strong><small>exercícios com carga maior</small></div>
+      </div>
+    </div>
+
+    <details class="card edit-perfil">
+      <summary>✎ Editar perfil e avaliação</summary>
+      <form id="perfilForm" class="pf">
+        <label>Nome<input name="nome" value="${esc(p.nome)}"></label>
+        <label>Idade<input name="idade" inputmode="numeric" value="${p.idade}"></label>
+        <label>Altura (cm)<input name="altura" inputmode="numeric" value="${p.altura}"></label>
+        <label>Meta de treinos/semana<input name="metaSemanal" inputmode="numeric" value="${p.metaSemanal}"></label>
+        <label>Experiência<select name="experiencia">${Object.keys(NIVEIS).map(n => `<option ${n === p.experiencia ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
+        <label>Execução técnica<select name="tecnica">${Object.keys(NIVEIS).map(n => `<option ${n === p.tecnica ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
+        <label class="full">Objetivo<input name="objetivo" value="${esc(p.objetivo)}"></label>
+        <label class="full">O que te motiva<input name="motivacao" value="${esc(p.motivacao)}"></label>
+        <label class="full">Seu sonho<textarea name="sonho" rows="3">${esc(p.sonho)}</textarea></label>
+        <button class="btn primary full">Salvar perfil</button>
+      </form>
+    </details>`;
+
+  charts.push(new Chart($('#cInd'), {
+    type: 'bar',
+    data: { labels: ['Frequência', 'Técnica', 'Composição'], datasets: [{ data: [k.freq, k.tec, k.comp], backgroundColor: [acc, '#f5b83d', '#9b6bff'], borderRadius: 8, maxBarThickness: 48 }] },
+    options: { ...base, plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => c.parsed.y + '/100' } } }, scales: { x: { grid: { display: false } }, y: { grid: { color: grid }, min: 0, max: 100, ticks: { stepSize: 25 } } } },
+  }));
+
+  $('#perfilForm').onsubmit = e => {
+    e.preventDefault();
+    const f = Object.fromEntries(new FormData(e.target));
+    Object.assign(db.perfil, f, {
+      idade: parseInt(f.idade) || p.idade, altura: parseFloat(String(f.altura).replace(',', '.')) || p.altura,
+      metaSemanal: Math.max(1, parseInt(f.metaSemanal) || p.metaSemanal),
+    });
+    save(); toast('Perfil atualizado'); renderDesempenho('aba=perfil');
+  };
 }
 
 // ---------- Ajustes / backup ----------
