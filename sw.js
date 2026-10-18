@@ -1,5 +1,5 @@
 // Cache para funcionar offline na academia. Páginas: rede primeiro; demais arquivos: cache primeiro.
-const CACHE = 'meutreino-v4';
+const CACHE = 'meutreino-v5';
 const ASSETS = ['./', 'index.html', 'style.css', 'app.js', 'exercises.js', 'exercises-extra.js', 'data.js', 'manifest.webmanifest', 'icon.svg',
   'https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js'];
 

@@ -318,6 +318,9 @@ body.noscroll { overflow: hidden; }
 .notas button { border: 1px solid var(--line); background: var(--surface); color: var(--text); border-radius: 8px; padding: 8px 0; font: inherit; font-size: 13px; font-weight: 700; cursor: pointer; }
 .notas button.on { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
 
+.moved { border-color: var(--warn); }
+.moved p { margin: 4px 0 0; }
+
 /* Ajustes */
 .file { position: relative; }
 details { border-top: 1px solid var(--line); padding: 8px 0; }

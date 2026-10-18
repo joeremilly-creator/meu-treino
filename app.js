@@ -71,6 +71,9 @@ function renderHome() {
   const thisWeek = ss.filter(s => new Date(s.data) >= weekStart(new Date())).length;
   const last = ss[ss.length - 1];
   view.innerHTML = `
+    ${OLD_HOST ? `<div class="card moved"><strong>O app mudou de endereço</strong>
+      <p class="muted small">Agora ele fica em <b>${NEW_HOST}</b>. Toque abaixo para levar seus treinos, cargas e pesos deste celular para o novo link.</p>
+      <button class="btn primary" id="moveData">Levar meus dados e abrir o novo app</button></div>` : ''}
     ${active ? `<a class="card resume" href="#/sessao"><div><small>Treino em andamento</small><strong>${esc(treinoById(active.treino)?.nome)}</strong></div><span class="pill">Continuar ›</span></a>` : ''}
     <section class="stats">
       <div><strong>${ss.length}</strong><small>treinos feitos</small></div>
@@ -88,6 +91,27 @@ function renderHome() {
         ${t.id === next.id ? '<span class="pill">Próximo</span>' : '<span class="chev">›</span>'}
       </a>`;
     }).join('')}`;
+  if (OLD_HOST) $('#moveData').onclick = () => {
+    const pacote = btoa(unescape(encodeURIComponent(JSON.stringify(db))));
+    location.href = `https://${NEW_HOST}/#/importar?d=${encodeURIComponent(pacote)}`;
+  };
+}
+
+// ---------- Mudança de endereço (github.io → Vercel) ----------
+// Cada endereço guarda os dados separados no celular; o pacote viaja no # da URL (não vai para servidor nenhum).
+const NEW_HOST = 'meutreinopersonalizado.vercel.app';
+const OLD_HOST = location.hostname.endsWith('github.io');
+function renderImportar(query) {
+  setHeader('Trazer dados');
+  let data;
+  try { data = JSON.parse(decodeURIComponent(escape(atob(new URLSearchParams(query).get('d') || '')))); } catch {}
+  history.replaceState(null, '', '#/');
+  if (!data?.treinos || !data?.sessoes) { toast('Não foi possível ler os dados'); return renderHome(); }
+  const meus = db.sessoes.filter(s => !s.importado).length, deles = data.sessoes.filter(s => !s.importado).length;
+  if (meus > deles && !confirm(`Este aparelho já tem ${meus} treinos registrados aqui e o pacote tem ${deles}. Substituir mesmo assim?`)) return renderHome();
+  db = data; save();
+  toast(`Dados trazidos: ${data.sessoes.length} treinos e ${data.peso.length} pesos`);
+  renderHome();
 }
 
 function renderTreino(id) {
@@ -823,7 +847,8 @@ function route() {
   window.scrollTo(0, 0);
   if (sheet) closeSheet();
   if (!['treino', 'exercicios', 'ex'].includes(parts[0])) editMode = false;
-  if (parts[0] === 'treino') renderTreino(parts[1]);
+  if (parts[0] === 'importar') renderImportar(query);
+  else if (parts[0] === 'treino') renderTreino(parts[1]);
   else if (parts[0] === 'sessao') renderSessao();
   else if (parts[0] === 'ex') renderExercicio(parts[1], query);
   else if (parts[0] === 'exercicios' || parts[0] === 'guia') renderExercicios(query);
